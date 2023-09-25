@@ -449,13 +449,12 @@ impl ScrollArea {
 
         {
             // Clip the content, but only when we really need to:
-            let clip_rect_margin = ui.visuals().clip_rect_margin;
             let mut content_clip_rect = ui.clip_rect();
             for d in 0..2 {
                 if has_bar[d] {
                     if state.content_is_too_large[d] {
-                        content_clip_rect.min[d] = inner_rect.min[d] - clip_rect_margin;
-                        content_clip_rect.max[d] = inner_rect.max[d] + clip_rect_margin;
+                        content_clip_rect.min[d] = inner_rect.min[d];
+                        content_clip_rect.max[d] = inner_rect.max[d];
                     }
                 } else {
                     // Nice handling of forced resizing beyond the possible:
@@ -758,8 +757,6 @@ impl Prepared {
                 // * When one ScrollArea is nested inside another, and the outer
                 //   is scrolled so that the scroll-bars of the inner ScrollArea (us)
                 //   is outside the clip rectangle.
-                // Really this should use the tighter clip_rect that ignores clip_rect_margin, but we don't store that.
-                // clip_rect_margin is quite a hack. It would be nice to get rid of it.
                 let width = max_cross - min_cross;
                 max_cross = ui.clip_rect().max[1 - d] - outer_margin;
                 min_cross = max_cross - width;
