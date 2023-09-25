@@ -393,24 +393,15 @@ impl Prepared {
 
         let max_rect = Rect::from_min_max(
             self.state.left_top_pos(),
-            bounds
-                .max
-                .at_least(self.state.left_top_pos() + Vec2::splat(32.0)),
+            bounds.max.at_least(self.state.left_top_pos()),
         );
-
-        let shadow_radius = ctx.style().visuals.window_shadow.extrusion; // hacky
-        let clip_rect_margin = ctx.style().visuals.clip_rect_margin.max(shadow_radius);
-
-        let clip_rect = Rect::from_min_max(self.state.left_top_pos(), bounds.max)
-            .expand(clip_rect_margin)
-            .intersect(bounds);
 
         let mut ui = Ui::new(
             ctx.clone(),
             self.layer_id,
             self.layer_id.id,
             max_rect,
-            clip_rect,
+            screen_rect,
         );
         ui.set_enabled(self.enabled);
         ui.set_visible(!self.temporarily_invisible);
