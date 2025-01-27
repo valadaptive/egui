@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use emath::{Rect, TSTransform};
+use emath::TSTransform;
 use epaint::{
     text::{cursor::CCursor, Galley, LayoutJob},
     StrokeKind,
