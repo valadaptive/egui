@@ -1,10 +1,7 @@
 use std::{borrow::Cow, ops::Range};
 
 use epaint::{
-    text::{
-        cursor::{CCursor, PCursor},
-        TAB_SIZE,
-    },
+    text::{cursor::Cursor, TAB_SIZE},
     Galley,
 };
 
@@ -69,7 +66,7 @@ pub trait TextBuffer {
         s
     }
 
-    fn insert_text_at(&mut self, ccursor: &mut CCursor, text_to_insert: &str, char_limit: usize) {
+    fn insert_text_at(&mut self, cursor: &mut Cursor, text_to_insert: &str, char_limit: usize) {
         if char_limit < usize::MAX {
             let mut new_string = text_to_insert;
             // Avoid subtract with overflow panic
@@ -80,14 +77,14 @@ pub trait TextBuffer {
                 Some((idx, _)) => &new_string[..idx],
             };
 
-            ccursor.index += self.insert_text(new_string, ccursor.index);
+            cursor.index += self.insert_text(new_string, cursor.index);
         } else {
-            ccursor.index += self.insert_text(text_to_insert, ccursor.index);
+            cursor.index += self.insert_text(text_to_insert, cursor.index);
         }
     }
 
-    fn decrease_indentation(&mut self, ccursor: &mut CCursor) {
-        let line_start = find_line_start(self.as_str(), *ccursor);
+    fn decrease_indentation(&mut self, cursor: &mut Cursor) {
+        let line_start = find_line_start(self.as_str(), *cursor);
 
         let remove_len = if self.as_str().chars().nth(line_start.index) == Some('\t') {
             Some(1)
@@ -105,13 +102,13 @@ pub trait TextBuffer {
 
         if let Some(len) = remove_len {
             self.delete_char_range(line_start.index..(line_start.index + len));
-            if *ccursor != line_start {
-                *ccursor -= len;
+            if *cursor != line_start {
+                *cursor -= len;
             }
         }
     }
 
-    fn delete_selected(&mut self, cursor_range: &CursorRange) -> CCursor {
+    fn delete_selected(&mut self, cursor_range: &CursorRange) -> Cursor {
         let [min, max] = cursor_range.sorted_cursors();
         self.delete_selected_ccursor_range([min.ccursor, max.ccursor])
     }

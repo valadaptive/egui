@@ -7,6 +7,7 @@ use parley::{
 };
 
 use crate::{
+    mutex::Mutex,
     text::{Row, RowVisuals},
     Mesh,
 };
@@ -62,6 +63,7 @@ pub fn layout(fonts: &mut FontsImpl, job: LayoutJob) -> Galley {
         return Galley {
             job: Arc::new(job),
             rows: Default::default(),
+            parley_layout: Mutex::new(parley::Layout::new()),
             rect: Rect::from_min_max(Pos2::ZERO, Pos2::ZERO),
             mesh_bounds: Rect::NOTHING,
             num_vertices: 0,
@@ -280,6 +282,7 @@ pub fn layout(fonts: &mut FontsImpl, job: LayoutJob) -> Galley {
     Galley {
         job: Arc::new(job),
         rows,
+        parley_layout: Mutex::new(layout),
         elided: false,
         rect: acc_logical_bounds,
         mesh_bounds: acc_mesh_bounds,
