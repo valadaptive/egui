@@ -6,7 +6,11 @@
 //! to get callbacks on certain events ([`Context::on_begin_pass`], [`Context::on_end_pass`]).
 
 use crate::{
-    text, Align, Align2, Color32, Context, FontFamily, FontId, Id, Rect, Shape, Vec2, WidgetText,
+    text::{
+        self,
+        style::{FontStyle, GenericFamily},
+    },
+    Align, Align2, Color32, Context, Id, Rect, Shape, Vec2, WidgetText,
 };
 
 /// Register this plugin on the given egui context,
@@ -92,13 +96,13 @@ impl State {
         let mut bounding_rect = Rect::from_points(&[pos]);
 
         let color = Color32::GRAY;
-        let font_id = FontId::new(10.0, FontFamily::Proportional);
+        let font_style = FontStyle::simple(10.0, GenericFamily::SystemUi);
 
         for Entry { location, text } in entries {
             {
                 // Paint location to left of `pos`:
                 let location_galley =
-                    ctx.fonts(|f| f.layout(location, font_id.clone(), color, f32::INFINITY));
+                    ctx.fonts(|f| f.layout(location, font_style.clone(), color, f32::INFINITY));
                 let location_rect =
                     Align2::RIGHT_TOP.anchor_size(pos - 4.0 * Vec2::X, location_galley.size());
                 painter.galley(location_rect.min, location_galley, color);
@@ -112,7 +116,7 @@ impl State {
                     ctx,
                     &ctx.style(),
                     text::TextWrapping::wrap_at_width(available_width),
-                    font_id.clone().into(),
+                    font_style.clone().into(),
                     Align::TOP,
                 );
                 let rect = Align2::LEFT_TOP.anchor_size(pos, galley.size());

@@ -3,8 +3,11 @@ use std::{borrow::Cow, sync::Arc};
 use emath::GuiRounding as _;
 
 use crate::{
-    text::{LayoutJob, TextWrapping},
-    Align, Color32, FontFamily, FontSelection, Galley, Style, TextStyle, TextWrapMode, Ui, Visuals,
+    text::{
+        style::{FontSlant, FontStack, FontStyle},
+        LayoutJob, TextWrapping,
+    },
+    Align, Color32, FontSelection, Galley, Style, TextStyle, TextWrapMode, Ui, Visuals,
 };
 
 /// Text and optional style choices for it.
@@ -28,7 +31,8 @@ pub struct RichText {
     size: Option<f32>,
     extra_letter_spacing: f32,
     line_height: Option<f32>,
-    family: Option<FontFamily>,
+    // TODO(valadaptive): just stick FontStyle in here entirely
+    family: Option<FontStack>,
     text_style: Option<TextStyle>,
     background_color: Color32,
     expand_bg: f32,
@@ -180,19 +184,16 @@ impl RichText {
     ///
     /// Only the families available in [`crate::FontDefinitions::families`] may be used.
     #[inline]
-    pub fn family(mut self, family: FontFamily) -> Self {
-        self.family = Some(family);
+    pub fn family(mut self, family: impl Into<FontStack>) -> Self {
+        self.family = Some(family.into());
         self
     }
 
     /// Select the font and size.
     /// This overrides the value from [`Self::text_style`].
     #[inline]
-    pub fn font(mut self, font_id: crate::FontId) -> Self {
-        let crate::FontId { size, family } = font_id;
-        self.size = Some(size);
-        self.family = Some(family);
-        self
+    pub fn font(mut self, font_id: FontStyle) -> Self {
+        todo!()
     }
 
     /// Override the [`TextStyle`].
@@ -402,23 +403,24 @@ impl RichText {
         let line_color = text_color.unwrap_or_else(|| style.visuals.text_color());
         let text_color = text_color.unwrap_or(crate::Color32::PLACEHOLDER);
 
-        let font_id = {
-            let mut font_id = text_style
+        // TODO(valadaptive)
+        let font_style = {
+            let mut font_style = text_style
                 .or_else(|| style.override_text_style.clone())
                 .map_or_else(
                     || fallback_font.resolve(style),
                     |text_style| text_style.resolve(style),
                 );
-            if let Some(fid) = style.override_font_id.clone() {
-                font_id = fid;
+            if let Some(fid) = style.override_font.clone() {
+                font_style = fid;
             }
             if let Some(size) = size {
-                font_id.size = size;
+                font_style.size = size;
             }
             if let Some(family) = family {
-                font_id.family = family;
+                font_style.family = family;
             }
-            font_id
+            font_style
         };
 
         let mut background_color = background_color;
@@ -445,12 +447,11 @@ impl RichText {
         (
             text,
             crate::text::TextFormat {
-                font_id,
+                font: font_style.with_slant(FontSlant::italic(italics)),
                 extra_letter_spacing,
                 line_height,
                 color: text_color,
                 background: background_color,
-                italics,
                 underline,
                 strikethrough,
                 valign,

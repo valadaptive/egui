@@ -5,7 +5,7 @@
 
 #![allow(clippy::mem_forget)] // False positive from enum_map macro
 
-use egui::text::LayoutJob;
+use egui::text::{style::FontStyle, LayoutJob};
 use egui::TextStyle;
 
 /// View some code with syntax highlighting and selection.
@@ -33,10 +33,10 @@ pub fn highlight(
     // performing it at a separate thread (ctx, ctx.style()) can be used and when ui is available
     // (ui.ctx(), ui.style()) can be used
 
-    impl egui::cache::ComputerMut<(&egui::FontId, &CodeTheme, &str, &str), LayoutJob> for Highlighter {
+    impl egui::cache::ComputerMut<(&FontStyle, &CodeTheme, &str, &str), LayoutJob> for Highlighter {
         fn compute(
             &mut self,
-            (font_id, theme, code, lang): (&egui::FontId, &CodeTheme, &str, &str),
+            (font_id, theme, code, lang): (&FontStyle, &CodeTheme, &str, &str),
         ) -> LayoutJob {
             self.highlight(font_id.clone(), theme, code, lang)
         }
@@ -45,7 +45,7 @@ pub fn highlight(
     type HighlightCache = egui::cache::FrameCache<LayoutJob, Highlighter>;
 
     let font_id = style
-        .override_font_id
+        .override_font
         .clone()
         .unwrap_or_else(|| TextStyle::Monospace.resolve(style));
 
@@ -152,7 +152,7 @@ pub struct CodeTheme {
     #[cfg(feature = "syntect")]
     syntect_theme: SyntectTheme,
     #[cfg(feature = "syntect")]
-    font_id: egui::FontId,
+    font_style: FontStyle,
 
     #[cfg(not(feature = "syntect"))]
     formats: enum_map::EnumMap<TokenType, egui::TextFormat>,
@@ -167,15 +167,15 @@ impl Default for CodeTheme {
 impl CodeTheme {
     /// Selects either dark or light theme based on the given style.
     pub fn from_style(style: &egui::Style) -> Self {
-        let font_id = style
-            .override_font_id
+        let font_style = style
+            .override_font
             .clone()
             .unwrap_or_else(|| TextStyle::Monospace.resolve(style));
 
         if style.visuals.dark_mode {
-            Self::dark_with_font_id(font_id)
+            Self::dark_with_font_style(font_style)
         } else {
-            Self::light_with_font_id(font_id)
+            Self::light_with_font_style(font_style)
         }
     }
 
@@ -188,7 +188,7 @@ impl CodeTheme {
     /// # });
     /// ```
     pub fn dark(font_size: f32) -> Self {
-        Self::dark_with_font_id(egui::FontId::monospace(font_size))
+        Self::dark_with_font_style(FontStyle::monospace(font_size))
     }
 
     /// ### Example
@@ -200,7 +200,7 @@ impl CodeTheme {
     /// # });
     /// ```
     pub fn light(font_size: f32) -> Self {
-        Self::light_with_font_id(egui::FontId::monospace(font_size))
+        Self::light_with_font_style(FontStyle::monospace(font_size))
     }
 
     /// Load code theme from egui memory.
@@ -252,19 +252,19 @@ impl CodeTheme {
 
 #[cfg(feature = "syntect")]
 impl CodeTheme {
-    fn dark_with_font_id(font_id: egui::FontId) -> Self {
+    fn dark_with_font_style(font_style: FontStyle) -> Self {
         Self {
             dark_mode: true,
             syntect_theme: SyntectTheme::Base16MochaDark,
-            font_id,
+            font_style,
         }
     }
 
-    fn light_with_font_id(font_id: egui::FontId) -> Self {
+    fn light_with_font_style(font_style: FontStyle) -> Self {
         Self {
             dark_mode: false,
             syntect_theme: SyntectTheme::SolarizedLight,
-            font_id,
+            font_style,
         }
     }
 
@@ -285,35 +285,35 @@ impl CodeTheme {
     // The syntect version takes it by value. This could be avoided by specializing the from_style
     // function, but at the cost of more code duplication.
     #[allow(clippy::needless_pass_by_value)]
-    fn dark_with_font_id(font_id: egui::FontId) -> Self {
+    fn dark_with_font_style(font_style: FontStyle) -> Self {
         use egui::{Color32, TextFormat};
         Self {
             dark_mode: true,
             formats: enum_map::enum_map![
-                TokenType::Comment => TextFormat::simple(font_id.clone(), Color32::from_gray(120)),
-                TokenType::Keyword => TextFormat::simple(font_id.clone(), Color32::from_rgb(255, 100, 100)),
-                TokenType::Literal => TextFormat::simple(font_id.clone(), Color32::from_rgb(87, 165, 171)),
-                TokenType::StringLiteral => TextFormat::simple(font_id.clone(), Color32::from_rgb(109, 147, 226)),
-                TokenType::Punctuation => TextFormat::simple(font_id.clone(), Color32::LIGHT_GRAY),
-                TokenType::Whitespace => TextFormat::simple(font_id.clone(), Color32::TRANSPARENT),
+                TokenType::Comment => TextFormat::simple(font_style.clone(), Color32::from_gray(120)),
+                TokenType::Keyword => TextFormat::simple(font_style.clone(), Color32::from_rgb(255, 100, 100)),
+                TokenType::Literal => TextFormat::simple(font_style.clone(), Color32::from_rgb(87, 165, 171)),
+                TokenType::StringLiteral => TextFormat::simple(font_style.clone(), Color32::from_rgb(109, 147, 226)),
+                TokenType::Punctuation => TextFormat::simple(font_style.clone(), Color32::LIGHT_GRAY),
+                TokenType::Whitespace => TextFormat::simple(font_style.clone(), Color32::TRANSPARENT),
             ],
         }
     }
 
     // The syntect version takes it by value
     #[allow(clippy::needless_pass_by_value)]
-    fn light_with_font_id(font_id: egui::FontId) -> Self {
+    fn light_with_font_style(font_style: FontStyle) -> Self {
         use egui::{Color32, TextFormat};
         Self {
             dark_mode: false,
             #[cfg(not(feature = "syntect"))]
             formats: enum_map::enum_map![
-                TokenType::Comment => TextFormat::simple(font_id.clone(), Color32::GRAY),
-                TokenType::Keyword => TextFormat::simple(font_id.clone(), Color32::from_rgb(235, 0, 0)),
-                TokenType::Literal => TextFormat::simple(font_id.clone(), Color32::from_rgb(153, 134, 255)),
-                TokenType::StringLiteral => TextFormat::simple(font_id.clone(), Color32::from_rgb(37, 203, 105)),
-                TokenType::Punctuation => TextFormat::simple(font_id.clone(), Color32::DARK_GRAY),
-                TokenType::Whitespace => TextFormat::simple(font_id.clone(), Color32::TRANSPARENT),
+                TokenType::Comment => TextFormat::simple(font_style.clone(), Color32::GRAY),
+                TokenType::Keyword => TextFormat::simple(font_style.clone(), Color32::from_rgb(235, 0, 0)),
+                TokenType::Literal => TextFormat::simple(font_style.clone(), Color32::from_rgb(153, 134, 255)),
+                TokenType::StringLiteral => TextFormat::simple(font_style.clone(), Color32::from_rgb(37, 203, 105)),
+                TokenType::Punctuation => TextFormat::simple(font_style.clone(), Color32::DARK_GRAY),
+                TokenType::Whitespace => TextFormat::simple(font_style.clone(), Color32::TRANSPARENT),
             ],
         }
     }
@@ -349,7 +349,7 @@ impl CodeTheme {
                         // (TokenType::Whitespace, "whitespace"),
                     ] {
                         let format = &mut self.formats[tt];
-                        ui.style_mut().override_font_id = Some(format.font_id.clone());
+                        ui.style_mut().override_font = Some(format.font.clone());
                         ui.visuals_mut().override_text_color = Some(format.color);
                         ui.radio_value(&mut selected_tt, tt, tt_name);
                     }
@@ -415,7 +415,7 @@ impl Highlighter {
     #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
     fn highlight(
         &self,
-        font_id: egui::FontId,
+        font_style: FontStyle,
         theme: &CodeTheme,
         code: &str,
         lang: &str,
@@ -424,7 +424,7 @@ impl Highlighter {
             // Fallback:
             LayoutJob::simple(
                 code.into(),
-                font_id,
+                font_style,
                 if theme.dark_mode {
                     egui::Color32::LIGHT_GRAY
                 } else {
@@ -450,7 +450,7 @@ impl Highlighter {
         let syn_theme = theme.syntect_theme.syntect_key_name();
         let mut h = HighlightLines::new(syntax, &self.ts.themes[syn_theme]);
 
-        use egui::text::{LayoutSection, TextFormat};
+        use egui::text::{style::FontSlant, LayoutSection, TextFormat};
 
         let mut job = LayoutJob {
             text: text.into(),
@@ -472,9 +472,8 @@ impl Highlighter {
                     leading_space: 0.0,
                     byte_range: as_byte_range(text, range),
                     format: TextFormat {
-                        font_id: theme.font_id.clone(),
+                        font: theme.font_style.with_slant(FontSlant::italic(italics)),
                         color: text_color,
-                        italics,
                         underline,
                         ..Default::default()
                     },

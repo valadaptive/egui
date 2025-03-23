@@ -181,10 +181,16 @@ fn format_from_style(
     };
 
     egui::text::TextFormat {
-        font_id: text_style.resolve(egui_style),
+        font: text_style
+            .resolve(egui_style)
+            .with_slant(egui::text::style::FontSlant::italic(emark_style.italics))
+            .with_weight(if emark_style.strong || emark_style.heading {
+                egui::text::style::FontWeight::BOLD
+            } else {
+                egui::text::style::FontWeight::NORMAL
+            }),
         color,
         background,
-        italics: emark_style.italics,
         underline,
         strikethrough,
         valign,

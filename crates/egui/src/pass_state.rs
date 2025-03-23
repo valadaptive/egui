@@ -1,9 +1,10 @@
 use ahash::HashMap;
+use epaint::text::style::{FontStyle, GenericFamily};
 
 use crate::{id::IdSet, style, Align, Id, IdMap, LayerId, Rangef, Rect, Vec2, WidgetRects};
 
 #[cfg(debug_assertions)]
-use crate::{pos2, Align2, Color32, FontId, NumExt, Painter};
+use crate::{pos2, Align2, Color32, NumExt, Painter};
 
 /// Reset at the start of each frame.
 #[derive(Clone, Debug, Default)]
@@ -131,10 +132,10 @@ impl DebugRect {
         }
 
         if !callstack.is_empty() {
-            let font_id = FontId::monospace(12.0);
+            let font_style = FontStyle::simple(12.0, GenericFamily::Monospace);
             let text = format!("{callstack}\n\n(click to copy)");
             let text_color = Color32::WHITE;
-            let galley = painter.layout_no_wrap(text, font_id, text_color);
+            let galley = painter.layout_no_wrap(text, font_style, text_color);
 
             // Position the text either under or above:
             let screen_rect = ctx.screen_rect();
