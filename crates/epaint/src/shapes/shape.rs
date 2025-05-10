@@ -469,33 +469,23 @@ impl Shape {
                 *pos = transform * *pos;
                 underline.width *= transform.scaling;
 
-                let Galley {
-                    job: _,
-                    rows,
-                    elided: _,
-                    rect,
-                    mesh_bounds,
-                    num_vertices: _,
-                    num_indices: _,
-                    pixels_per_point: _,
-                    selection_color: _,
-                    ..
-                } = Arc::make_mut(galley);
+                let galley = Arc::make_mut(galley);
 
-                for row in rows {
+                for row in galley.rows_mut() {
                     row.visuals.mesh_bounds = transform.scaling * row.visuals.mesh_bounds;
                     for v in &mut row.visuals.mesh.vertices {
                         v.pos = Pos2::new(transform.scaling * v.pos.x, transform.scaling * v.pos.y);
                     }
-                    if let Some(rects) = &mut row.visuals.selection_rects {
-                        for rect in rects {
-                            *rect = transform.scaling * *rect;
-                        }
+                }
+
+                if let Some(rects) = galley.selection_rects.as_mut() {
+                    for rect in rects.iter_mut().flat_map(|r| r.iter_mut()) {
+                        *rect = transform.scaling * *rect;
                     }
                 }
 
-                *mesh_bounds = transform.scaling * *mesh_bounds;
-                *rect = transform.scaling * *rect;
+                galley.mesh_bounds = transform.scaling * galley.mesh_bounds;
+                galley.rect = transform.scaling * galley.rect;
             }
             Self::Mesh(mesh) => {
                 Arc::make_mut(mesh).transform(transform);

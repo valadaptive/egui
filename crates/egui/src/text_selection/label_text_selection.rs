@@ -185,8 +185,9 @@ impl LabelSelectionState {
                             list.mutate_shape(shape_idx, |shape| {
                                 if let epaint::Shape::Text(text_shape) = &mut shape.shape {
                                     let galley = Arc::make_mut(&mut text_shape.galley);
-                                    for row in &mut galley.rows {
-                                        row.visuals.selection_rects = None;
+                                    for section in &mut galley.sections {
+                                        //section.section.visuals.selection_rects = None;
+                                        // TODO(valadaptive)
                                     }
                                 }
                             });
@@ -248,7 +249,7 @@ impl LabelSelectionState {
         if last_copied_galley_rect.bottom() <= new_galley_rect.top() {
             self.text_to_copy.push('\n');
             let vertical_distance = new_galley_rect.top() - last_copied_galley_rect.bottom();
-            if estimate_row_height(galley) * 0.5 < vertical_distance {
+            if galley.estimated_first_row_height() * 0.5 < vertical_distance {
                 self.text_to_copy.push('\n');
             }
         } else {
@@ -603,7 +604,7 @@ impl LabelSelectionState {
                     let is_fully_visible = ui.clip_rect().contains_rect(response.rect); // TODO(emilk): remove this HACK workaround for https://github.com/emilk/egui/issues/1531
                     if selection_changed && !is_fully_visible {
                         // Scroll to keep primary cursor in view:
-                        let row_height = estimate_row_height(galley);
+                        let row_height = galley.estimated_first_row_height();
                         let primary_cursor_rect =
                             global_from_galley * cursor_rect(galley, &range.focus(), row_height);
                         ui.scroll_to_rect(primary_cursor_rect, None);
@@ -615,7 +616,7 @@ impl LabelSelectionState {
         let selection = cursor_state.selection();
 
         let did_draw_selection = selection
-            .is_some_and(|selection| paint_text_selection(galley, ui.visuals(), &selection));
+            .is_some_and(|selection| paint_text_selection(galley, ui.visuals(), selection));
 
         #[cfg(feature = "accesskit")]
         super::accesskit_text::update_accesskit_for_text_widget(
@@ -675,13 +676,5 @@ fn selected_text(galley: &Galley, selection: &Selection) -> String {
         galley.text().to_owned()
     } else {
         selection.slice_str(galley).to_owned()
-    }
-}
-
-fn estimate_row_height(galley: &Galley) -> f32 {
-    if let Some(row) = galley.rows.first() {
-        row.rect.height()
-    } else {
-        galley.size().y
     }
 }

@@ -1,11 +1,16 @@
-use std::{borrow::Cow, collections::BTreeMap, sync::Arc};
+use std::{
+    borrow::Cow,
+    collections::BTreeMap,
+    hash::{BuildHasher, Hash, Hasher},
+    sync::Arc,
+};
 
 use crate::{
     text::{glyph_atlas::GlyphAtlas, Galley, LayoutJob},
     TextureAtlas,
 };
 use ecolor::Color32;
-use emath::{vec2, GuiRounding, NumExt as _, OrderedFloat};
+use emath::{vec2, GuiRounding, NumExt as _, OrderedFloat, Rect};
 
 use parley::{
     fontique::{self, Blob, FontInfoOverride, QueryFamily},
@@ -18,6 +23,7 @@ use epaint_default_fonts::{EMOJI_ICON, HACK_REGULAR, NOTO_EMOJI_REGULAR, UBUNTU_
 use super::{
     glyph_atlas::SubpixelBin,
     style::{FontFamily, FontId, GenericFamily, TextFormat},
+    GalleySection, LayoutSection, PlacedSection,
 };
 
 // ----------------------------------------------------------------------------
@@ -854,7 +860,6 @@ impl Fonts<'_> {
                 pixels_per_point: self.pixels_per_point,
             },
             job,
-            self.pixels_per_point,
         )
     }
 
@@ -864,18 +869,7 @@ impl Fonts<'_> {
     #[inline]
     #[doc(hidden)]
     pub fn layout_job_uncached(&mut self, job: LayoutJob) -> Arc<Galley> {
-        Arc::new(super::parley_layout::layout(
-            &mut FontsLayoutView {
-                font_context: &mut self.fonts.font_context,
-                layout_context: &mut self.fonts.layout_context,
-                texture_atlas: &mut self.fonts.atlas,
-                glyph_atlas: &mut self.fonts.glyph_atlas,
-                font_tweaks: &mut self.fonts.font_tweaks,
-                hinting_enabled: self.fonts.hinting_enabled,
-                pixels_per_point: self.pixels_per_point,
-            },
-            job,
-        ))
+        todo!()
     }
 
     /// Will wrap text at the given width and line break at `\n`.
@@ -923,26 +917,22 @@ impl Fonts<'_> {
 
 // ----------------------------------------------------------------------------
 
-struct CachedGalley {
+struct Cached<T> {
     /// When it was last used
     last_used: u32,
-    galley: Arc<Galley>,
+    item: T,
 }
 
 #[derive(Default)]
 struct GalleyCache {
     /// Frame counter used to do garbage collection on the cache
     generation: u32,
-    cache: nohash_hasher::IntMap<u64, CachedGalley>,
+    galleys: nohash_hasher::IntMap<u64, Cached<Arc<Galley>>>,
+    sections: nohash_hasher::IntMap<u64, Cached<Arc<GalleySection>>>,
 }
 
 impl GalleyCache {
-    fn layout(
-        &mut self,
-        fonts: &mut FontsLayoutView<'_>,
-        mut job: LayoutJob,
-        pixels_per_point: f32,
-    ) -> Arc<Galley> {
+    fn layout(&mut self, fonts: &mut FontsLayoutView<'_>, mut job: LayoutJob) -> Arc<Galley> {
         if job.wrap.max_width.is_finite() {
             // Protect against rounding errors in egui layout code.
 
@@ -968,41 +958,213 @@ impl GalleyCache {
             job.wrap.max_width = job.wrap.max_width.round();
         }
 
-        let hash = crate::util::hash((&job, OrderedFloat(pixels_per_point))); // TODO(emilk): even faster hasher?
+        let hash = crate::util::hash((&job, OrderedFloat(fonts.pixels_per_point))); // TODO(emilk): even faster hasher?
 
-        match self.cache.entry(hash) {
+        match self.galleys.entry(hash) {
             std::collections::hash_map::Entry::Occupied(entry) => {
                 let cached = entry.into_mut();
                 cached.last_used = self.generation;
-                cached.galley.clone()
+                cached.item.clone()
             }
             std::collections::hash_map::Entry::Vacant(entry) => {
                 //let galley = super::layout(fonts, job.into());
-                let galley = super::parley_layout::layout(fonts, job);
-                let galley = Arc::new(galley);
-                entry.insert(CachedGalley {
+                let galley = Arc::new(Self::split_layout_by_paragraph(
+                    self.generation,
+                    &mut self.sections,
+                    fonts,
+                    job,
+                ));
+                entry.insert(Cached {
                     last_used: self.generation,
-                    galley: galley.clone(),
+                    item: galley.clone(),
                 });
                 galley
             }
         }
     }
 
+    fn split_layout_by_paragraph(
+        generation: u32,
+        section_cache: &mut nohash_hasher::IntMap<u64, Cached<Arc<GalleySection>>>,
+        fonts: &mut FontsLayoutView<'_>,
+        job: LayoutJob,
+    ) -> Galley {
+        let mut sections = Vec::new();
+        let mut rect = Rect::NOTHING;
+        let mut mesh_bounds = Rect::NOTHING;
+        let mut num_vertices = 0;
+        let mut num_indices = 0;
+        let mut elided = false;
+
+        let mut start_index = 0;
+        let mut remaining = job.text.as_str();
+        let mut current_section = 0;
+        let mut current_row = 0;
+        let mut current_y = 0.0;
+        let mut max_rows_remaining = job.wrap.max_rows;
+        while start_index < job.text.len() {
+            let end = job.text[start_index..]
+                .find('\n')
+                .map_or(job.text.len(), |i| start_index + i + 1);
+
+            //let paragraph_range = start_index..start_index + paragraph.len();
+            let paragraph_range = start_index..end;
+            let is_first_paragraph = start_index == 0;
+            //start_index += paragraph.len() + 1;
+            start_index = end;
+
+            let mut paragraph_job = LayoutJob {
+                // TODO(valadaptive): Make this a Cow<str> so we don't have to clone the text if the paragraph has
+                // already been laid out
+                text: job.text[paragraph_range.clone()].to_owned(),
+                wrap: crate::text::TextWrapping {
+                    max_rows: max_rows_remaining,
+                    ..job.wrap
+                },
+                sections: Vec::new(),
+                break_on_newline: job.break_on_newline,
+                halign: job.halign,
+                justify: job.justify,
+                first_row_min_height: if is_first_paragraph {
+                    job.first_row_min_height
+                } else {
+                    0.0
+                },
+                round_output_to_gui: job.round_output_to_gui,
+            };
+
+            // Add overlapping sections:
+            for section in &job.sections[current_section..job.sections.len()] {
+                let LayoutSection {
+                    leading_space,
+                    byte_range: section_range,
+                    format,
+                } = section;
+
+                // `start` and `end` are the byte range of the current paragraph.
+                // How does the current section overlap with the paragraph range?
+
+                if section_range.end <= paragraph_range.start {
+                    // The section is behind us
+                    current_section += 1;
+                } else if paragraph_range.end <= section_range.start {
+                    break; // Haven't reached this one yet.
+                } else {
+                    // Section range overlaps with paragraph range
+                    debug_assert!(
+                        section_range.start < section_range.end,
+                        "Bad byte_range: {section_range:?}"
+                    );
+                    let new_range = section_range.start.saturating_sub(paragraph_range.start)
+                        ..(section_range.end.at_most(paragraph_range.end))
+                            .saturating_sub(paragraph_range.start);
+                    debug_assert!(
+                        new_range.start <= new_range.end,
+                        "Bad new section range: {new_range:?}"
+                    );
+                    paragraph_job.sections.push(LayoutSection {
+                        leading_space: if paragraph_range.start <= new_range.start {
+                            *leading_space
+                        } else {
+                            0.0
+                        },
+                        byte_range: new_range,
+                        format: format.clone(),
+                    });
+                }
+            }
+
+            let hash = crate::util::hash((&paragraph_job, OrderedFloat(fonts.pixels_per_point)));
+
+            let section = match section_cache.entry(hash) {
+                std::collections::hash_map::Entry::Occupied(entry) => {
+                    let cached = entry.into_mut();
+                    cached.last_used = generation;
+                    cached.item.clone()
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    //let galley = super::layout(fonts, job.into());
+                    let section = super::parley_layout::layout(fonts, paragraph_job);
+                    let galley = Arc::new(section);
+                    entry.insert(Cached {
+                        last_used: generation,
+                        item: galley.clone(),
+                    });
+                    galley
+                }
+            };
+
+            for row in &section.rows {
+                rect = rect.union(row.rect.translate(vec2(0.0, current_y)));
+                mesh_bounds = mesh_bounds.union(row.visuals.mesh_bounds);
+            }
+            num_vertices += section.num_vertices;
+            num_indices += section.num_indices;
+            let num_rows = section.rows.len();
+
+            // This will prevent us from invalidating cache entries unnecessarily:
+            if max_rows_remaining != usize::MAX {
+                max_rows_remaining -= num_rows;
+                // Ignore extra trailing row, see merging `Galley::concat` for more details.
+                if paragraph_range.end < job.text.len() && !section.elided {
+                    max_rows_remaining += 1;
+                }
+            }
+
+            elided |= section.elided;
+            let height = section.height;
+
+            let placed = PlacedSection {
+                section,
+                index: sections.len(),
+                y_start: current_y,
+                row_range: current_row..current_row + num_rows,
+                byte_range: paragraph_range,
+            };
+            current_row += num_rows;
+            current_y += height;
+
+            sections.push(placed);
+            if elided {
+                break;
+            }
+        }
+
+        if !rect.is_finite() {
+            rect = Rect::ZERO;
+        }
+        if !mesh_bounds.is_finite() {
+            mesh_bounds = Rect::ZERO;
+        }
+
+        Galley {
+            job: Arc::new(job),
+            sections,
+            selection_rects: None,
+            selection_color: Color32::TRANSPARENT,
+            elided,
+            rect,
+            mesh_bounds,
+            num_vertices,
+            num_indices,
+            pixels_per_point: fonts.pixels_per_point,
+        }
+    }
+
     pub fn num_galleys_in_cache(&self) -> usize {
-        self.cache.len()
+        self.galleys.len()
     }
 
     /// Must be called once per frame to clear the [`Galley`] cache.
     pub fn flush_cache(&mut self) {
         let current_generation = self.generation;
-        self.cache.retain(|_key, cached| {
+        self.galleys.retain(|_key, cached| {
             cached.last_used == current_generation // only keep those that were used this frame
         });
         self.generation = self.generation.wrapping_add(1);
     }
 
     pub fn clear(&mut self) {
-        self.cache.clear();
+        self.galleys.clear();
     }
 }

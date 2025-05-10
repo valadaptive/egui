@@ -89,7 +89,7 @@ pub fn adjust_colors(
 
             if !galley.is_empty() {
                 let galley = Arc::make_mut(galley);
-                for row in &mut galley.rows {
+                for row in galley.rows_mut() {
                     for vertex in &mut row.visuals.mesh.vertices {
                         adjust_color(&mut vertex.color);
                     }

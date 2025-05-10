@@ -4,11 +4,11 @@
 use std::ops::Range;
 use std::sync::Arc;
 
-use super::cursor::{ByteCursor, Selection};
+use super::cursor::{Affinity, AnchorBase, ByteCursor, Selection};
 use super::glyph_atlas::UvRect;
 use super::style::{FontId, TextFormat};
 use crate::{mutex::Mutex, Color32, Mesh};
-use emath::{Align, OrderedFloat, Pos2, Rect, Vec2};
+use emath::{vec2, Align, OrderedFloat, Pos2, Rect, Vec2};
 use parley::OverflowWrap;
 
 /// Describes the task of laying out text.
@@ -447,26 +447,10 @@ pub struct Galley {
     ///
     /// Note that a paragraph (a piece of text separated with `\n`)
     /// can be split up into multiple rows.
-    pub rows: Vec<Row>,
+    pub sections: Vec<PlacedSection>,
 
-    /// Parley text layout, primarily used for text editing.
-    /// TODO(valadaptive): serde support?
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub(super) parley_layout: LayoutAndOffset,
-
-    /// Optional extra layout for the character used to truncate this text.
-    /// Boxed because it's pretty large and most text is not truncated.
-    ///
-    /// TODO(valadaptive): use this to test whether the truncation character is
-    /// selected.
-    #[cfg_attr(feature = "serde", serde(skip))]
-    #[allow(dead_code)]
-    pub(super) overflow_char_layout: Option<Box<LayoutAndOffset>>,
-
-    /// Lazy-initialized AccessKit adapter for this galley's layout.
-    #[cfg(feature = "accesskit")]
-    #[cfg_attr(feature = "serde", serde(skip))]
-    pub(super) accessibility: LazyAccessibility,
+    /// Geometry for any selection to be painted, by row.
+    pub selection_rects: Option<Vec<Vec<Rect>>>,
 
     /// Color of the selection, if it exists. Otherwise, [`Color32::TRANSPARENT`].
     pub selection_color: Color32,
@@ -571,6 +555,74 @@ impl LazyAccessibility {
     }
 }
 
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub struct GalleySection {
+    pub rows: Vec<Row>,
+
+    pub height: f32,
+
+    /// Parley text layout, primarily used for text editing.
+    /// TODO(valadaptive): serde support?
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub(super) parley_layout: LayoutAndOffset,
+
+    /// Optional extra layout for the character used to truncate this text.
+    /// Boxed because it's pretty large and most text is not truncated.
+    ///
+    /// TODO(valadaptive): use this to test whether the truncation character is
+    /// selected.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    #[allow(dead_code)]
+    pub(super) overflow_char_layout: Option<Box<LayoutAndOffset>>,
+
+    /// Lazy-initialized AccessKit adapter for this galley's layout.
+    #[cfg(feature = "accesskit")]
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub(super) accessibility: LazyAccessibility,
+
+    /// Set to true the text was truncated due to [`TextWrapping::max_rows`].
+    pub elided: bool,
+
+    /// Tight bounding box around all the meshes in all the rows.
+    /// Can be used for culling.
+    pub mesh_bounds: Rect,
+
+    /// Total number of vertices in all the row meshes.
+    pub num_vertices: usize,
+
+    /// Total number of indices in all the row meshes.
+    pub num_indices: usize,
+}
+
+impl Default for GalleySection {
+    fn default() -> Self {
+        Self {
+            rows: Default::default(),
+            height: 0.0,
+            parley_layout: Default::default(),
+            overflow_char_layout: Default::default(),
+            #[cfg(feature = "accesskit")]
+            accessibility: Default::default(),
+            elided: Default::default(),
+            mesh_bounds: Rect::ZERO,
+            num_vertices: Default::default(),
+            num_indices: Default::default(),
+        }
+    }
+}
+
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub struct PlacedSection {
+    pub index: usize,
+    pub section: Arc<GalleySection>,
+    /// Y position of the start of the section
+    pub y_start: f32,
+    pub row_range: Range<usize>,
+    pub byte_range: Range<usize>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct Row {
@@ -594,9 +646,6 @@ pub struct RowVisuals {
     /// Does NOT include leading or trailing whitespace glyphs!!
     pub mesh_bounds: Rect,
 
-    /// Geometry for any selection to be painted.
-    pub selection_rects: Option<Vec<Rect>>,
-
     /// The number of triangle indices added before the first glyph triangle.
     ///
     /// This can be used to insert more triangles after the background but before the glyphs,
@@ -614,7 +663,6 @@ impl Default for RowVisuals {
         Self {
             mesh: Default::default(),
             mesh_bounds: Rect::NOTHING,
-            selection_rects: None,
             glyph_index_start: 0,
             glyph_vertex_range: 0..0,
         }
@@ -660,63 +708,133 @@ impl Glyph {
 /// Helper for creating and transforming text [`Selection`]s given a layout
 /// computed in a [`Galley`].
 pub struct SelectionDriver<'a> {
-    layout_offset: Vec2,
-    layout: &'a parley::Layout<Color32>,
-    text: &'a str,
-    #[cfg(feature = "accesskit")]
-    accessibility: &'a LazyAccessibility,
+    galley: &'a Galley,
 }
 
 impl SelectionDriver<'_> {
-    fn pos_to_parley(&self, pos: Vec2) -> Vec2 {
-        pos - self.layout_offset
+    fn text(&self) -> &str {
+        &self.galley.job.text
     }
 
     /// Returns a [`Selection`] of the entire contents of the associated [`Galley`].
     pub fn select_all(&self) -> Selection {
-        parley::Selection::from_byte_index(self.layout, 0usize, Default::default())
-            .move_lines(self.layout, isize::MAX, true)
-            .into()
+        Selection::new(
+            ByteCursor {
+                index: 0,
+                affinity: Default::default(),
+            },
+            ByteCursor {
+                index: self.text().len() - 1,
+                affinity: Default::default(),
+            },
+        )
     }
 
     /// Returns an empty [`Selection`] at the given byte location.
     pub fn select_at_cursor(&self, cursor: &ByteCursor) -> Selection {
-        parley::Selection::from_byte_index(self.layout, cursor.index, cursor.affinity.into()).into()
+        Selection::new(*cursor, *cursor)
     }
 
     /// Returns a [`Selection`] at the given [`ByteCursor`] range. See [`Selection::anchor`] and [`Selection::focus`]
     /// for more info.
     pub fn select_cursor_range(&self, anchor: &ByteCursor, focus: &ByteCursor) -> Selection {
-        parley::Selection::from_byte_index(self.layout, anchor.index, Default::default())
-            .extend(focus.as_parley(self.layout))
-            .into()
+        Selection::new(*anchor, *focus)
     }
 
     /// Returns an empty [`Selection`] at the given galley-space location.
     pub fn select_single_point_at(&self, pos: Vec2) -> Selection {
-        let Vec2 { x, y } = self.pos_to_parley(pos);
-        parley::Selection::from_point(self.layout, x, y).into()
+        let (Vec2 { x, y }, section) = self.galley.pos_to_parley(pos);
+
+        let parley_selection =
+            parley::Selection::from_point(&section.section.parley_layout.layout.lock(), x, y);
+        Selection::from_parley(&parley_selection, section.byte_range.start)
     }
 
     /// Returns a [`Selection`] of the word at the given galley-space location.
     pub fn select_word_at(&self, pos: Vec2) -> Selection {
-        let Vec2 { x, y } = self.pos_to_parley(pos);
-        parley::Selection::word_from_point(self.layout, x, y).into()
+        let (Vec2 { x, y }, section) = self.galley.pos_to_parley(pos);
+
+        let parley_selection =
+            parley::Selection::word_from_point(&section.section.parley_layout.layout.lock(), x, y);
+        Selection::from_parley(&parley_selection, section.byte_range.start)
     }
 
     /// Returns a [`Selection`] of the layout line (wrapping text creates distinct lines) at the given galley-space
     /// location.
     pub fn select_line_at(&self, pos: Vec2) -> Selection {
-        let Vec2 { x, y } = self.pos_to_parley(pos);
-        parley::Selection::line_from_point(self.layout, x, y).into()
+        let (Vec2 { x, y }, section) = self.galley.pos_to_parley(pos);
+
+        let parley_selection =
+            parley::Selection::line_from_point(&section.section.parley_layout.layout.lock(), x, y);
+        Selection::from_parley(&parley_selection, section.byte_range.start)
+    }
+
+    /// Given four cursors, return the left-most and right-most cursors from the set.
+    ///
+    /// Copied from Parley.
+    fn cursor_min_max(
+        layout: &parley::Layout<Color32>,
+        cursors: [parley::Cursor; 4],
+    ) -> [parley::Cursor; 2] {
+        let cursor_pos = cursors
+            .map(|cursor| (cursor, cursor.geometry(layout, 0.0)))
+            .map(|(cursor, rect)| (cursor, (rect.y0, rect.x0)));
+        let mut min = cursor_pos[0];
+        let mut max = cursor_pos[0];
+        for pos in cursor_pos {
+            if pos.1 < min.1 {
+                min = pos;
+            }
+            if pos.1 > max.1 {
+                max = pos;
+            }
+        }
+        [min.0, max.0]
     }
 
     /// Returns a [`Selection`] with the [`Selection::focus`] moved to the given galley-space location. If this is a
     /// word-based or line-based selection, the [`Selection::anchor`] may also be extended to a word or line boundary
     /// respectively.
     pub fn extend_selection_to_point(&self, selection: &Selection, pos: Vec2) -> Selection {
-        let Vec2 { x, y } = self.pos_to_parley(pos);
-        selection.0.extend_to_point(self.layout, x, y).into()
+        let (Vec2 { x, y }, dest_section) = self.galley.pos_to_parley(pos);
+        let layout = dest_section.section.parley_layout.layout.lock();
+
+        let (target, start, end) = match selection.anchor_base {
+            AnchorBase::Cluster => {
+                let new_focus = parley::Cursor::from_point(&layout, x, y);
+                return Selection::new(
+                    selection.anchor,
+                    ByteCursor::from_parley(&new_focus, dest_section.byte_range.start),
+                );
+            }
+            AnchorBase::Word(start, end) => (
+                parley::Selection::word_from_point(&layout, x, y),
+                start,
+                end,
+            ),
+            AnchorBase::Line(start, end) => (
+                parley::Selection::line_from_point(&layout, x, y),
+                start,
+                end,
+            ),
+        };
+
+        let [anchor, focus] = Self::cursor_min_max(
+            &layout,
+            [
+                target.anchor(),
+                target.focus(),
+                start.as_parley(&layout, dest_section.byte_range.start),
+                end.as_parley(&layout, dest_section.byte_range.start),
+            ],
+        );
+
+        Selection {
+            anchor: ByteCursor::from_parley(&anchor, dest_section.byte_range.start),
+            focus: ByteCursor::from_parley(&focus, dest_section.byte_range.start),
+            h_pos: None,
+            anchor_base: selection.anchor_base,
+        }
     }
 
     /// Returns a [`Selection`] with the [`Selection::focus`] moved to the given [`ByteCursor`]. If this is a word-based
@@ -726,28 +844,60 @@ impl SelectionDriver<'_> {
         selection: &Selection,
         focus: &ByteCursor,
     ) -> Selection {
-        selection.0.extend(focus.as_parley(self.layout)).into()
+        Selection::new(selection.anchor, *focus)
     }
 
     /// Returns a [`Selection`] at the previous visual character (this will differ from the previous "logical" character
     /// in right-to-left text). If the `extend` parameter is true, the original selection's [`Selection::anchor`] will
     /// stay where it is; if it is false, the selection at the new location will be empty.
     pub fn select_prev_character(&self, selection: &Selection, extend: bool) -> Selection {
-        selection.0.previous_visual(self.layout, extend).into()
+        if !selection.is_empty() && !extend {
+            let [anchor_geom, focus_geom] = [selection.anchor, selection.focus].map(|cursor| {
+                let section = self.galley.section_at_cursor(cursor);
+                let layout = section.section.parley_layout.layout.lock();
+                cursor
+                    .as_parley(&layout, section.byte_range.start)
+                    .geometry(&layout, 0.0)
+            });
+            let new_focus = if (anchor_geom.y0, anchor_geom.x0) < (focus_geom.y0, focus_geom.x0) {
+                selection.anchor
+            } else {
+                selection.focus
+            };
+            Selection::new(new_focus, new_focus)
+        } else {
+            selection.maybe_extend(selection.focus.prev_visual(self.galley), extend)
+        }
     }
 
     /// Returns a [`Selection`] at the next visual character (this will differ from the previous "logical" character
     /// in right-to-left text). If the `extend` parameter is true, the original selection's [`Selection::anchor`] will
     /// stay where it is; if it is false, the selection at the new location will be empty.
     pub fn select_next_character(&self, selection: &Selection, extend: bool) -> Selection {
-        selection.0.next_visual(self.layout, extend).into()
+        if !selection.is_empty() && !extend {
+            let [anchor_geom, focus_geom] = [selection.anchor, selection.focus].map(|cursor| {
+                let section = self.galley.section_at_cursor(cursor);
+                let layout = section.section.parley_layout.layout.lock();
+                cursor
+                    .as_parley(&layout, section.byte_range.start)
+                    .geometry(&layout, 0.0)
+            });
+            let new_focus = if (anchor_geom.y0, anchor_geom.x0) > (focus_geom.y0, focus_geom.x0) {
+                selection.anchor
+            } else {
+                selection.focus
+            };
+            Selection::new(new_focus, new_focus)
+        } else {
+            selection.maybe_extend(selection.focus.next_visual(self.galley), extend)
+        }
     }
 
     /// Returns the byte range of the beginning of the paragraph to the left of the cursor (returning 0 if we're at the
     /// first paragraph). Used for deleting text, so we don't need to return a [`Selection`].
     pub fn paragraph_before_cursor(&self, selection: &Selection) -> Option<Range<usize>> {
         let range = selection.byte_range();
-        let newline_index = self.text[0..range.start].rfind('\n').unwrap_or(0);
+        let newline_index = self.text()[0..range.start].rfind('\n').unwrap_or(0);
         if newline_index == range.end {
             self.prev_cluster(selection)
         } else {
@@ -759,9 +909,9 @@ impl SelectionDriver<'_> {
     /// first paragraph). Used for deleting text, so we don't need to return a [`Selection`].
     pub fn paragraph_after_cursor(&self, selection: &Selection) -> Option<Range<usize>> {
         let range = selection.byte_range();
-        let newline_index = self.text[range.start..]
+        let newline_index = self.text()[range.start..]
             .find('\n')
-            .map_or(self.text.len(), |idx| idx + range.start);
+            .map_or(self.text().len(), |idx| idx + range.start);
         if newline_index == range.end {
             self.next_cluster(selection)
         } else {
@@ -774,7 +924,8 @@ impl SelectionDriver<'_> {
     pub fn prev_cluster(&self, selection: &Selection) -> Option<Range<usize>> {
         // Adapted from Parley:
         // https://github.com/linebender/parley/blob/4307d3f/parley/src/layout/editor.rs#L236-L275
-        let cluster = selection.0.focus().logical_clusters(self.layout)[0]?;
+
+        /*let cluster = selection.0.focus().logical_clusters(self.layout)[0]?;
         let range = cluster.text_range();
         let end = range.end;
         let start = if cluster.is_hard_line_break() || cluster.is_emoji() {
@@ -788,7 +939,8 @@ impl SelectionDriver<'_> {
                 .and_then(|s| s.char_indices().next_back())?;
             start
         };
-        Some(start..end)
+        Some(start..end)*/
+        todo!()
     }
 
     /// Returns the byte range of the previous logical character. Used for deleting text, so we don't need to return a
@@ -796,68 +948,74 @@ impl SelectionDriver<'_> {
     pub fn next_cluster(&self, selection: &Selection) -> Option<Range<usize>> {
         // Adapted from Parley:
         // https://github.com/linebender/parley/blob/4307d3f/parley/src/layout/editor.rs#L215-L233
-        let cluster = selection.0.focus().logical_clusters(self.layout)[1]?;
+        /*let cluster = selection.0.focus().logical_clusters(self.layout)[1]?;
         let range = cluster.text_range();
         if range.is_empty() {
             return None;
         }
-        Some(range)
+        Some(range)*/
+        todo!()
     }
 
     /// Returns a [`Selection`] at the previous visual word (this will differ from the previous "logical" word in
     /// right-to-left text). If the `extend` parameter is true, the original selection's [`Selection::anchor`] will stay
     /// where it is; if it is false, the selection at the new location will be empty.
     pub fn select_prev_word(&self, selection: &Selection, extend: bool) -> Selection {
-        selection.0.previous_visual_word(self.layout, extend).into()
+        //selection.0.previous_visual_word(self.layout, extend).into()
+        todo!()
     }
 
     /// Returns a [`Selection`] at the next visual word (this will differ from the next "logical" word in
     /// right-to-left text). If the `extend` parameter is true, the original selection's [`Selection::anchor`] will stay
     /// where it is; if it is false, the selection at the new location will be empty.
     pub fn select_next_word(&self, selection: &Selection, extend: bool) -> Selection {
-        selection.0.next_visual_word(self.layout, extend).into()
+        //selection.0.next_visual_word(self.layout, extend).into()
+        todo!()
     }
 
     /// Returns a [`Selection`] at the same approximate x-position in the previous line. Successive calls to
     /// [`Self::select_prev_row`] and [`Self::select_next_row`] maintain the [`Selection`]'s internal state, and will
     /// remember the selection cursor's horizontal position, even if the currently-selected line is not that long.
     pub fn select_prev_row(&self, selection: &Selection, extend: bool) -> Selection {
-        selection.0.previous_line(self.layout, extend).into()
+        //selection.0.previous_line(self.layout, extend).into()
+        todo!()
     }
 
     /// Returns a [`Selection`] at the same approximate x-position in the next line. Successive calls to
     /// [`Self::select_prev_row`] and [`Self::select_next_row`] maintain the [`Selection`]'s internal state, and will
     /// remember the selection cursor's horizontal position, even if the currently-selected line is not that long.
     pub fn select_next_row(&self, selection: &Selection, extend: bool) -> Selection {
-        selection.0.next_line(self.layout, extend).into()
+        //selection.0.next_line(self.layout, extend).into()
+        todo!()
     }
 
     /// Returns a [`Selection`] at the start of the current line. If the `extend` parameter is true, the original
     /// selection's [`Selection::anchor`] will stay where it is; if it is false, the selection at the new location will
     /// be empty.
     pub fn select_row_start(&self, selection: &Selection, extend: bool) -> Selection {
-        selection.0.line_start(self.layout, extend).into()
+        let section = self.galley.section_at_cursor(selection.focus);
+        let layout = section.section.parley_layout.layout.lock();
+        Selection::from_parley(
+            &selection
+                .as_parley(&layout, section.byte_range.start)
+                .line_start(&layout, extend),
+            section.byte_range.start,
+        )
     }
 
     /// Returns a [`Selection`] at the end of the current line. If the `extend` parameter is true, the original
     /// selection's [`Selection::anchor`] will stay where it is; if it is false, the selection at the new location will
     /// be empty.
     pub fn select_row_end(&self, selection: &Selection, extend: bool) -> Selection {
-        selection.0.line_end(self.layout, extend).into()
-    }
-
-    /// Call the given function with a sequence of rectangles (in galley-space) that represents the visual geometry of
-    /// this selection.
-    pub fn with_selection_rects(&self, selection: &Selection, mut f: impl FnMut(Rect, usize)) {
-        selection
-            .0
-            .geometry_with(self.layout, |parley_rect, line_idx| {
-                let rect = Rect {
-                    min: Pos2::new(parley_rect.x0 as f32, parley_rect.y0 as f32),
-                    max: Pos2::new(parley_rect.x1 as f32, parley_rect.y1 as f32),
-                };
-                f(rect, line_idx);
-            });
+        // TODO: doesn't work on wrapped lines for some reason
+        let section = self.galley.section_at_cursor(selection.focus);
+        let layout = section.section.parley_layout.layout.lock();
+        Selection::from_parley(
+            &selection
+                .as_parley(&layout, section.byte_range.start)
+                .line_end(&layout, extend),
+            section.byte_range.start,
+        )
     }
 
     #[cfg(feature = "accesskit")]
@@ -866,7 +1024,7 @@ impl SelectionDriver<'_> {
         &self,
         selection: &accesskit::TextSelection,
     ) -> Option<Selection> {
-        let accessibility =
+        /*let accessibility =
             self.accessibility
                 .get_or_init(self.text, self.layout, self.layout_offset);
         parley::Selection::from_access_selection(
@@ -874,7 +1032,8 @@ impl SelectionDriver<'_> {
             self.layout,
             &accessibility.layout_access,
         )
-        .map(Into::into)
+        .map(Into::into)*/
+        todo!()
     }
 
     #[cfg(feature = "accesskit")]
@@ -883,12 +1042,13 @@ impl SelectionDriver<'_> {
         &self,
         selection: &Selection,
     ) -> Option<accesskit::TextSelection> {
-        let accessibility =
+        /*let accessibility =
             self.accessibility
                 .get_or_init(self.text, self.layout, self.layout_offset);
         selection
             .0
-            .to_access_selection(self.layout, &accessibility.layout_access)
+            .to_access_selection(self.layout, &accessibility.layout_access)*/
+        todo!()
     }
 }
 
@@ -913,39 +1073,138 @@ impl Galley {
 
     #[cfg(feature = "accesskit")]
     pub fn accessibility(&self) -> &GalleyAccessibility {
-        self.accessibility.get_or_init(
+        /*self.accessibility.get_or_init(
             &self.job.text,
             &self.parley_layout.layout.lock(),
             self.parley_layout.offset,
-        )
+        )*/
+        todo!()
     }
 
-    pub fn paint_selection(&mut self, color: Color32, selection: &Selection) -> bool {
+    pub fn paint_selection(&mut self, color: Color32, selection: Selection) -> bool {
         self.selection_color = color;
 
         let mut did_draw_any = false;
-        selection.0.geometry_with(
-            &self.parley_layout.layout.lock(),
-            |parley_rect, line_idx| {
-                let rect = Rect {
-                    min: Pos2::new(parley_rect.x0 as f32, parley_rect.y0 as f32),
-                    max: Pos2::new(parley_rect.x1 as f32, parley_rect.y1 as f32),
-                }
-                .translate(self.parley_layout.offset);
 
-                let Some(row) = self.rows.get_mut(line_idx) else {
-                    return;
-                };
+        for (section, parley_selection) in Self::selection_to_parley(&mut self.sections, selection)
+        {
+            let inner_section = Arc::make_mut(&mut section.section);
+            parley_selection.geometry_with(
+                &inner_section.parley_layout.layout.lock(),
+                |parley_rect, line_idx| {
+                    let rect = Rect {
+                        min: Pos2::new(parley_rect.x0 as f32, parley_rect.y0 as f32),
+                        max: Pos2::new(parley_rect.x1 as f32, parley_rect.y1 as f32),
+                    }
+                    .translate(inner_section.parley_layout.offset + vec2(0.0, section.y_start));
 
-                let selection_rects = row.visuals.selection_rects.get_or_insert_default();
-                selection_rects.push(rect);
-                // Count selection rectangle bounds when culling
-                row.visuals.mesh_bounds = row.visuals.mesh_bounds.union(rect);
-                did_draw_any = true;
-            },
-        );
+                    let Some(row) = inner_section.rows.get_mut(line_idx) else {
+                        return;
+                    };
+
+                    let selection_rects = self
+                        .selection_rects
+                        .get_or_insert_with(|| vec![Vec::new(); 5]);
+                    selection_rects[line_idx].push(rect);
+                    // Count selection rectangle bounds when culling
+                    row.visuals.mesh_bounds = row.visuals.mesh_bounds.union(rect);
+                    did_draw_any = true;
+                },
+            );
+        }
 
         did_draw_any
+    }
+
+    pub fn estimated_first_row_height(&self) -> f32 {
+        self.sections
+            .first()
+            .and_then(|section| section.section.rows.first())
+            .map_or_else(|| self.size().y, |row| row.rect.height())
+    }
+
+    pub(super) fn section_at_cursor(&self, cursor: ByteCursor) -> &PlacedSection {
+        let mut section_index = self
+            .sections
+            .binary_search_by_key(&cursor.index, |section| section.byte_range.start)
+            .unwrap_or_else(|i| i.saturating_sub(1))
+            .min(self.sections.len() - 1);
+        if cursor.affinity == Affinity::Upstream
+            && cursor.index == self.sections[section_index].byte_range.start
+        {
+            section_index = section_index.saturating_sub(1);
+        }
+        &self.sections[section_index]
+    }
+
+    fn section_by_row_index(
+        sections: &[PlacedSection],
+        row_index: usize,
+    ) -> Option<&PlacedSection> {
+        let index = sections
+            .binary_search_by_key(&row_index, |section| section.row_range.start)
+            .unwrap_or_else(|i| i.saturating_sub(1));
+        sections.get(index)
+    }
+
+    fn section_by_row_index_mut(
+        sections: &mut [PlacedSection],
+        row_index: usize,
+    ) -> Option<&mut PlacedSection> {
+        let index = sections
+            .binary_search_by_key(&row_index, |section| section.row_range.start)
+            .unwrap_or_else(|i| i.saturating_sub(1));
+        sections.get_mut(index)
+    }
+
+    pub fn rows(&self) -> impl Iterator<Item = &Row> {
+        self.sections
+            .iter()
+            .map(|section| section.section.rows.iter())
+            .flatten()
+    }
+
+    pub fn rows_mut(&mut self) -> impl Iterator<Item = &mut Row> {
+        self.sections
+            .iter_mut()
+            .map(|section| Arc::make_mut(&mut section.section).rows.iter_mut())
+            .flatten()
+    }
+
+    fn selection_to_parley(
+        sections: &mut [PlacedSection],
+        selection: Selection,
+    ) -> impl Iterator<Item = (&mut PlacedSection, parley::Selection)> {
+        sections
+            .iter_mut()
+            // TODO: I think <= is correct here
+            .skip_while(move |section| section.byte_range.end <= selection.byte_range().start)
+            .take_while(move |section| section.byte_range.start <= selection.byte_range().end)
+            .map(move |section| {
+                let relative_start = selection
+                    .byte_range()
+                    .start
+                    .saturating_sub(section.byte_range.start);
+                let relative_end = selection
+                    .byte_range()
+                    .end
+                    .saturating_sub(section.byte_range.start);
+
+                let parley_selection = {
+                    let layout = section.section.parley_layout.layout.lock();
+
+                    parley::Selection::new(
+                        parley::Cursor::from_byte_index(
+                            &layout,
+                            relative_start,
+                            Default::default(),
+                        ),
+                        parley::Cursor::from_byte_index(&layout, relative_end, Default::default()),
+                    )
+                };
+
+                (section, parley_selection)
+            })
     }
 }
 
@@ -975,20 +1234,38 @@ impl std::ops::Deref for Galley {
 
 /// ## Physical positions
 impl Galley {
-    fn pos_to_parley(&self, pos: Vec2) -> Vec2 {
-        pos - self.parley_layout.offset
+    fn pos_to_parley(&self, pos: Vec2) -> (Vec2, &PlacedSection) {
+        let section_index = self
+            .sections
+            .binary_search_by_key(&OrderedFloat(pos.y), |section| {
+                OrderedFloat(section.y_start)
+            })
+            .unwrap_or_else(|i| i.saturating_sub(1));
+
+        let section = &self.sections[section_index];
+        let pos = pos - section.section.parley_layout.offset - vec2(0.0, section.y_start);
+
+        (pos, section)
     }
 
     /// Returns a 0-width Rect.
     pub fn pos_from_cursor(&self, cursor: ByteCursor) -> Rect {
-        let layout = &self.parley_layout.layout.lock();
-        let cursor = cursor.as_parley(layout);
-        let parley_rect = cursor.geometry(layout, 0.0);
+        let section = self.section_at_cursor(cursor);
+        let layout = section.section.parley_layout.layout.lock();
+        let cursor = cursor.as_parley(&layout, section.byte_range.start);
+        dbg!(section.index, cursor.index(), cursor.affinity());
+        let parley_rect = cursor.geometry(&layout, 0.0);
         Rect {
-            min: Pos2::new(parley_rect.x0 as f32, parley_rect.y0 as f32),
-            max: Pos2::new(parley_rect.x1 as f32, parley_rect.y1 as f32),
+            min: Pos2::new(
+                parley_rect.x0 as f32,
+                parley_rect.y0 as f32 + section.y_start,
+            ),
+            max: Pos2::new(
+                parley_rect.x1 as f32,
+                parley_rect.y1 as f32 + section.y_start,
+            ),
         }
-        .translate(self.parley_layout.offset)
+        .translate(section.section.parley_layout.offset)
     }
 
     /// Cursor at the given position within the galley.
@@ -997,8 +1274,12 @@ impl Galley {
     /// considered same as a cursor at the end. This allows implementing text-selection by dragging above/below the
     /// galley.
     pub fn cursor_from_pos(&self, pos: Vec2) -> ByteCursor {
-        let Vec2 { x, y } = self.pos_to_parley(pos);
-        parley::Cursor::from_point(&self.parley_layout.layout.lock(), x, y).into()
+        let (Vec2 { x, y }, section) = self.pos_to_parley(pos);
+        let layout = section.section.parley_layout.layout.lock();
+        ByteCursor::from_parley(
+            &parley::Cursor::from_point(&layout, x, y),
+            section.byte_range.start,
+        )
     }
 }
 
@@ -1015,12 +1296,17 @@ impl Galley {
 
     /// Cursor to one-past last character.
     pub fn end(&self) -> ByteCursor {
-        parley::Cursor::from_byte_index(
-            &self.parley_layout.layout.lock(),
-            usize::MAX,
-            Default::default(),
+        let Some(section) = self.sections.last() else {
+            return Default::default();
+        };
+        ByteCursor::from_parley(
+            &parley::Cursor::from_byte_index(
+                &section.section.parley_layout.layout.lock(),
+                usize::MAX,
+                Default::default(),
+            ),
+            section.byte_range.start,
         )
-        .into()
     }
 }
 
@@ -1030,11 +1316,9 @@ impl Galley {
     /// text [`Selection`]s.
     pub fn selection<T>(&self, f: impl FnOnce(&mut SelectionDriver<'_>) -> T) -> T {
         let mut driver = SelectionDriver {
-            layout_offset: self.parley_layout.offset,
-            layout: &self.parley_layout.layout.lock(),
-            text: &self.job.text,
-            #[cfg(feature = "accesskit")]
-            accessibility: &self.accessibility,
+            galley: &self,
+            //#[cfg(feature = "accesskit")]
+            //accessibility: &self.accessibility(),
         };
 
         f(&mut driver)

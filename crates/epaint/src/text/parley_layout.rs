@@ -7,11 +7,11 @@ use parley::{AlignmentOptions, BreakReason, GlyphRun, InlineBox, PositionedLayou
 
 use crate::{
     tessellator::Path,
-    text::{LayoutAndOffset, Row, RowVisuals},
+    text::{LayoutAndOffset, RowVisuals},
     Mesh, Stroke,
 };
 
-use super::{fonts::FontsLayoutView, Galley, LayoutJob};
+use super::{fonts::FontsLayoutView, Galley, GalleySection, LayoutJob, Row};
 
 fn render_decoration(
     pixels_per_point: f32,
@@ -31,24 +31,10 @@ fn render_decoration(
     path.stroke_open(1.0 / pixels_per_point, &stroke.into(), mesh);
 }
 
-pub(super) fn layout(fonts: &mut FontsLayoutView<'_>, job: LayoutJob) -> Galley {
+pub(super) fn layout(fonts: &mut FontsLayoutView<'_>, job: LayoutJob) -> GalleySection {
     let Some(first_section) = job.sections.first() else {
         // Early-out: no text
-        return Galley {
-            job: Arc::new(job),
-            rows: Default::default(),
-            parley_layout: LayoutAndOffset::default(),
-            overflow_char_layout: None,
-            #[cfg(feature = "accesskit")]
-            accessibility: Default::default(),
-            selection_color: Color32::TRANSPARENT,
-            rect: Rect::from_min_max(Pos2::ZERO, Pos2::ZERO),
-            mesh_bounds: Rect::NOTHING,
-            num_vertices: 0,
-            num_indices: 0,
-            pixels_per_point: fonts.pixels_per_point,
-            elided: true,
-        };
+        return Default::default();
     };
 
     let justify = job.justify && job.wrap.max_width.is_finite();
@@ -90,6 +76,8 @@ pub(super) fn layout(fonts: &mut FontsLayoutView<'_>, job: LayoutJob) -> Galley 
         builder.push_text(&job.text[section.byte_range.clone()]);
         builder.pop_style_span();
     });
+
+    dbg!(&job.text);
 
     // TODO(valadaptive): we don't need to assemble this string
     // (but RangedBuilder requires one call per individual style attribute :( )
@@ -174,6 +162,7 @@ pub(super) fn layout(fonts: &mut FontsLayoutView<'_>, job: LayoutJob) -> Galley 
 
     let mut vertical_offset = 0f32;
 
+    let mut height = 0f32;
     let mut prev_break_reason = None;
     for (i, line) in layout.lines().enumerate() {
         let mut mesh = Mesh::default();
@@ -287,7 +276,7 @@ pub(super) fn layout(fonts: &mut FontsLayoutView<'_>, job: LayoutJob) -> Galley 
                 }
             };
 
-        let mut is_inline_box_only = i == 0;
+        let mut is_inline_box_only = i == 0 && job.text != "\n";
         for item in line.items() {
             match item {
                 PositionedLayoutItem::GlyphRun(run) => {
@@ -461,12 +450,15 @@ pub(super) fn layout(fonts: &mut FontsLayoutView<'_>, job: LayoutJob) -> Galley 
             row_logical_bounds = Rect::ZERO;
         }
 
+        if !job.text[line.text_range()].is_empty() {
+            height = height.max(line.metrics().max_coord);
+        }
+
         let row = Row {
             rect: row_logical_bounds,
             visuals: RowVisuals {
                 mesh,
                 mesh_bounds,
-                selection_rects: None,
                 glyph_index_start,
                 glyph_vertex_range,
             },
@@ -491,20 +483,17 @@ pub(super) fn layout(fonts: &mut FontsLayoutView<'_>, job: LayoutJob) -> Galley 
         acc_logical_bounds = acc_logical_bounds.round_ui();
     }
 
-    Galley {
-        job: Arc::new(job),
+    GalleySection {
         rows,
+        height,
         parley_layout: LayoutAndOffset::new(layout, vec2(horiz_offset, vertical_offset)),
         overflow_char_layout: overflow_char_layout
             .map(|(layout, offset)| Box::new(LayoutAndOffset::new(layout, offset))),
         #[cfg(feature = "accesskit")]
         accessibility: Default::default(),
-        selection_color: Color32::TRANSPARENT,
         elided: !broke_all_lines,
-        rect: acc_logical_bounds,
         mesh_bounds: acc_mesh_bounds,
         num_vertices: acc_num_vertices,
         num_indices: acc_num_indices,
-        pixels_per_point: fonts.pixels_per_point,
     }
 }

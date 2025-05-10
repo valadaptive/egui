@@ -88,8 +88,13 @@ impl AllocInfo {
     pub fn from_galley(galley: &Galley) -> Self {
         // TODO(valadaptive): this doesn't count the Parley layout's memory usage
         Self::from_slice(galley.text().as_bytes())
-            + Self::from_slice(&galley.rows)
-            + galley.rows.iter().map(Self::from_galley_row).sum()
+            + Self::from_slice(&galley.sections)
+            + galley.sections.iter().map(Self::from_galley_section).sum()
+    }
+
+    fn from_galley_section(section: &crate::text::PlacedSection) -> Self {
+        Self::from_slice(&section.section.rows)
+            + section.section.rows.iter().map(Self::from_galley_row).sum()
     }
 
     fn from_galley_row(row: &crate::text::Row) -> Self {
@@ -216,7 +221,7 @@ impl PaintStats {
             Shape::Text(text_shape) => {
                 self.shape_text += AllocInfo::from_galley(&text_shape.galley);
 
-                for row in &text_shape.galley.rows {
+                for row in text_shape.galley.rows() {
                     self.text_shape_indices += AllocInfo::from_slice(&row.visuals.mesh.indices);
                     self.text_shape_vertices += AllocInfo::from_slice(&row.visuals.mesh.vertices);
                 }

@@ -731,13 +731,7 @@ impl WidgetText {
             Self::Text(_) => fonts.row_height(&FontSelection::Default.resolve(style)),
             Self::RichText(text) => text.font_height(fonts, style),
             Self::LayoutJob(job) => job.font_height(fonts),
-            Self::Galley(galley) => {
-                if let Some(row) = galley.rows.first() {
-                    row.rect.height().round_ui()
-                } else {
-                    galley.size().y.round_ui()
-                }
-            }
+            Self::Galley(galley) => galley.estimated_first_row_height().round_ui(),
         }
     }
 

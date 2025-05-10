@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
+use emath::{vec2, Vec2};
+
 use crate::{
-    epaint, pos2, text_selection::LabelSelectionState, vec2, Align, Direction, FontSelection,
-    Galley, Pos2, Response, Sense, Stroke, TextWrapMode, Ui, Widget, WidgetInfo, WidgetText,
-    WidgetType,
+    epaint, pos2, text_selection::LabelSelectionState, Align, Direction, FontSelection, Galley,
+    Pos2, Response, Sense, Stroke, TextWrapMode, Ui, Widget, WidgetInfo, WidgetText, WidgetType,
 };
 
 /// Static text.
@@ -215,14 +216,25 @@ impl Label {
             let galley = ui.fonts(|fonts| fonts.layout_job(layout_job));
 
             let pos = pos2(ui.max_rect().left(), ui.cursor().top());
-            assert!(!galley.rows.is_empty(), "Galleys are never empty");
+            let mut response = None;
+
             // collect a response from many rows:
-            let rect = galley.rows[0].rect.translate(vec2(pos.x, pos.y));
-            let mut response = ui.allocate_rect(rect, sense);
-            for row in galley.rows.iter().skip(1) {
-                let rect = row.rect.translate(vec2(pos.x, pos.y));
-                response |= ui.allocate_rect(rect, sense);
+            for section in &galley.sections {
+                for row in &section.section.rows {
+                    let row_resp = ui.allocate_rect(
+                        row.rect
+                            .translate(pos.to_vec2() + vec2(0.0, section.y_start)),
+                        sense,
+                    );
+                    response = match response {
+                        None => Some(row_resp),
+                        Some(response) => Some(response.union(row_resp)),
+                    }
+                }
             }
+
+            //let response = response.expect("Galleys are never empty");
+            let response = response.unwrap_or_else(|| ui.allocate_response(Vec2::ZERO, sense));
             (pos, galley, response)
         } else {
             // Apply wrap_mode, but don't overwrite anything important

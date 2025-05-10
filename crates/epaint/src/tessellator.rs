@@ -2031,135 +2031,146 @@ impl Tessellator {
 
         let rotator = Rot2::from_angle(*angle);
 
-        for row in &galley.rows {
-            if row.visuals.mesh.is_empty() {
-                continue;
-            }
+        for section in &galley.sections {
+            for (row_idx, row) in section.section.rows.iter().enumerate() {
+                if row.visuals.mesh.is_empty() {
+                    continue;
+                }
 
-            let mut row_rect = row.visuals.mesh_bounds;
-            if *angle != 0.0 {
-                row_rect = row_rect.rotate_bb(rotator);
-            }
-            row_rect = row_rect.translate(galley_pos.to_vec2());
+                let mut row_rect = row
+                    .visuals
+                    .mesh_bounds
+                    .translate(vec2(0.0, section.y_start));
+                if *angle != 0.0 {
+                    row_rect = row_rect.rotate_bb(rotator);
+                }
+                row_rect = row_rect.translate(galley_pos.to_vec2());
 
-            if self.options.coarse_tessellation_culling && !self.clip_rect.intersects(row_rect) {
-                // culling individual lines of text is important, since a single `Shape::Text`
-                // can span hundreds of lines.
-                continue;
-            }
+                if self.options.coarse_tessellation_culling && !self.clip_rect.intersects(row_rect)
+                {
+                    // culling individual lines of text is important, since a single `Shape::Text`
+                    // can span hundreds of lines.
+                    continue;
+                }
 
-            let mut post_selection_index_start = 0;
-            let mut index_offset = out.vertices.len() as u32;
+                let mut post_selection_index_start = 0;
+                let mut index_offset = out.vertices.len() as u32;
 
-            if let Some(selection_rects) = &row.visuals.selection_rects {
-                // Paint the selection above the background but below the text.
-                index_offset += (selection_rects.len() * 4) as u32;
-                // We're drawing the background here, so only draw the foreground later.
-                post_selection_index_start = row.visuals.glyph_index_start;
+                if let Some(selection_rects) = galley
+                    .selection_rects
+                    .as_ref()
+                    .and_then(|rects_by_row| rects_by_row.get(row_idx + section.row_range.start))
+                {
+                    // Paint the selection above the background but below the text.
+                    index_offset += (selection_rects.len() * 4) as u32;
+                    // We're drawing the background here, so only draw the foreground later.
+                    post_selection_index_start = row.visuals.glyph_index_start;
+
+                    out.indices.extend(
+                        row.visuals
+                            .mesh
+                            .indices
+                            .iter()
+                            .take(post_selection_index_start)
+                            // We know how many vertices the selection rectangles will take up, and since we're adding the
+                            // selection vertices first and the row vertices all at once, we should add that to the index
+                            // offset here too.
+                            .map(|index| index + index_offset),
+                    );
+
+                    if *angle == 0.0 {
+                        for rect in selection_rects {
+                            out.add_colored_rect(
+                                rect.translate(galley_pos.to_vec2()),
+                                galley.selection_color,
+                            );
+                        }
+                    } else {
+                        for rect in selection_rects {
+                            // We don't feather the background so let's not feather the selection either.
+                            fill_closed_path(
+                                0.0,
+                                &mut [
+                                    PathPoint {
+                                        pos: galley_pos + (rotator * rect.left_top().to_vec2()),
+                                        normal: Vec2::ZERO,
+                                    },
+                                    PathPoint {
+                                        pos: galley_pos + (rotator * rect.right_top().to_vec2()),
+                                        normal: Vec2::ZERO,
+                                    },
+                                    PathPoint {
+                                        pos: galley_pos + (rotator * rect.right_bottom().to_vec2()),
+                                        normal: Vec2::ZERO,
+                                    },
+                                    PathPoint {
+                                        pos: galley_pos + (rotator * rect.left_bottom().to_vec2()),
+                                        normal: Vec2::ZERO,
+                                    },
+                                ],
+                                galley.selection_color,
+                                out,
+                            );
+                        }
+                    }
+                }
 
                 out.indices.extend(
                     row.visuals
                         .mesh
                         .indices
                         .iter()
-                        .take(post_selection_index_start)
-                        // We know how many vertices the selection rectangles will take up, and since we're adding the
-                        // selection vertices first and the row vertices all at once, we should add that to the index
-                        // offset here too.
+                        // If there was a selection, we start from the foreground vertices. Otherwise, we start from zero.
+                        .skip(post_selection_index_start)
                         .map(|index| index + index_offset),
                 );
 
-                if *angle == 0.0 {
-                    for rect in selection_rects {
-                        out.add_colored_rect(
-                            rect.translate(galley_pos.to_vec2()),
-                            galley.selection_color,
-                        );
-                    }
-                } else {
-                    for rect in selection_rects {
-                        // We don't feather the background so let's not feather the selection either.
-                        fill_closed_path(
-                            0.0,
-                            &mut [
-                                PathPoint {
-                                    pos: galley_pos + (rotator * rect.left_top().to_vec2()),
-                                    normal: Vec2::ZERO,
-                                },
-                                PathPoint {
-                                    pos: galley_pos + (rotator * rect.right_top().to_vec2()),
-                                    normal: Vec2::ZERO,
-                                },
-                                PathPoint {
-                                    pos: galley_pos + (rotator * rect.right_bottom().to_vec2()),
-                                    normal: Vec2::ZERO,
-                                },
-                                PathPoint {
-                                    pos: galley_pos + (rotator * rect.left_bottom().to_vec2()),
-                                    normal: Vec2::ZERO,
-                                },
-                            ],
-                            galley.selection_color,
-                            out,
-                        );
-                    }
-                }
-            }
+                out.vertices.extend(
+                    row.visuals
+                        .mesh
+                        .vertices
+                        .iter()
+                        .enumerate()
+                        .map(|(i, vertex)| {
+                            let Vertex { mut pos, uv, mut color } = *vertex;
+                            pos.y += section.y_start;
 
-            out.indices.extend(
-                row.visuals
-                    .mesh
-                    .indices
-                    .iter()
-                    // If there was a selection, we start from the foreground vertices. Otherwise, we start from zero.
-                    .skip(post_selection_index_start)
-                    .map(|index| index + index_offset),
-            );
-
-            out.vertices.extend(
-                row.visuals
-                    .mesh
-                    .vertices
-                    .iter()
-                    .enumerate()
-                    .map(|(i, vertex)| {
-                        let Vertex { pos, uv, mut color } = *vertex;
-
-                        if let Some(override_text_color) = override_text_color {
-                            // Only override the glyph color (not background color, strike-through color, etc)
-                            if row.visuals.glyph_vertex_range.contains(&i) {
-                                color = *override_text_color;
+                            if let Some(override_text_color) = override_text_color {
+                                // Only override the glyph color (not background color, strike-through color, etc)
+                                if row.visuals.glyph_vertex_range.contains(&i) {
+                                    color = *override_text_color;
+                                }
+                            } else if color == Color32::PLACEHOLDER {
+                                color = *fallback_color;
                             }
-                        } else if color == Color32::PLACEHOLDER {
-                            color = *fallback_color;
-                        }
 
-                        if *opacity_factor < 1.0 {
-                            color = color.gamma_multiply(*opacity_factor);
-                        }
+                            if *opacity_factor < 1.0 {
+                                color = color.gamma_multiply(*opacity_factor);
+                            }
 
-                        debug_assert!(color != Color32::PLACEHOLDER, "A placeholder color made it to the tessellator. You forgot to set a fallback color.");
+                            debug_assert!(color != Color32::PLACEHOLDER, "A placeholder color made it to the tessellator. You forgot to set a fallback color.");
 
-                        let offset = if *angle == 0.0 {
-                            pos.to_vec2()
-                        } else {
-                            rotator * pos.to_vec2()
-                        };
+                            let offset = if *angle == 0.0 {
+                                pos.to_vec2()
+                            } else {
+                                rotator * pos.to_vec2()
+                            };
 
-                        Vertex {
-                            pos: galley_pos + offset,
-                            uv: (uv.to_vec2() * uv_normalizer).to_pos2(),
-                            color,
-                        }
-                    }),
-            );
-
-            if *underline != Stroke::NONE {
-                self.tessellate_line_segment(
-                    [row_rect.left_bottom(), row_rect.right_bottom()],
-                    *underline,
-                    out,
+                            Vertex {
+                                pos: galley_pos + offset,
+                                uv: (uv.to_vec2() * uv_normalizer).to_pos2(),
+                                color,
+                            }
+                        }),
                 );
+
+                if *underline != Stroke::NONE {
+                    self.tessellate_line_segment(
+                        [row_rect.left_bottom(), row_rect.right_bottom()],
+                        *underline,
+                        out,
+                    );
+                }
             }
         }
     }

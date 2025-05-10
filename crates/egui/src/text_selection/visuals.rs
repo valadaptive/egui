@@ -9,7 +9,7 @@ use crate::{vec2, Galley, Painter, Rect, Ui, Visuals};
 pub fn paint_text_selection(
     galley: &mut Arc<Galley>,
     visuals: &Visuals,
-    selection: &Selection,
+    selection: Selection,
 ) -> bool {
     if selection.is_empty() {
         return false;
