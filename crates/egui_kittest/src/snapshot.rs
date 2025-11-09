@@ -99,7 +99,7 @@ where
             self.windows
         } else if cfg!(target_os = "macos") {
             self.macos
-        } else if cfg!(target_os = "linux") {
+        } else if cfg!(any(target_os = "linux", target_os = "android")) {
             self.linux
         } else {
             self.fallback

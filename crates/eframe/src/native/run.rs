@@ -16,13 +16,13 @@ use crate::{
 
 // ----------------------------------------------------------------------------
 fn create_event_loop(native_options: &mut epi::NativeOptions) -> Result<EventLoop<UserEvent>> {
-    #[cfg(target_os = "android")]
+    #[cfg(any())]
     use winit::platform::android::EventLoopBuilderExtAndroid as _;
 
     profiling::function_scope!();
     let mut builder = winit::event_loop::EventLoop::with_user_event();
 
-    #[cfg(target_os = "android")]
+    #[cfg(any())]
     let mut builder =
         builder.with_android_app(native_options.android_app.take().ok_or_else(|| {
             crate::Error::AppCreation(Box::from(

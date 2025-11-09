@@ -394,7 +394,7 @@ pub struct NativeOptions {
     ///
     /// [`EventLoopBuilder::build`]: winit::event_loop::EventLoopBuilder::build
     /// [`with_android_app`]: winit::platform::android::EventLoopBuilderExtAndroid::with_android_app
-    #[cfg(target_os = "android")]
+    #[cfg(any())]
     pub android_app: Option<winit::platform::android::activity::AndroidApp>,
 }
 
@@ -415,7 +415,7 @@ impl Clone for NativeOptions {
 
             persistence_path: self.persistence_path.clone(),
 
-            #[cfg(target_os = "android")]
+            #[cfg(any())]
             android_app: self.android_app.clone(),
 
             ..*self
@@ -460,7 +460,7 @@ impl Default for NativeOptions {
 
             dithering: true,
 
-            #[cfg(target_os = "android")]
+            #[cfg(any())]
             android_app: None,
         }
     }

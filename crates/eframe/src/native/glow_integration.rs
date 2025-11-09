@@ -1329,7 +1329,7 @@ impl GlutinWindowContext {
                 );
 
                 // For Wayland : https://github.com/emilk/egui/issues/4196
-                if cfg!(target_os = "linux") {
+                if cfg!(any(target_os = "linux", target_os = "android")) {
                     let new_inner_size = window.inner_size();
                     if new_inner_size != old_inner_size {
                         self.resize(viewport_id, new_inner_size);

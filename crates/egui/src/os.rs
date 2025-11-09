@@ -32,7 +32,7 @@ impl OperatingSystem {
     pub const fn from_target_os() -> Self {
         if cfg!(target_arch = "wasm32") {
             Self::Unknown
-        } else if cfg!(target_os = "android") {
+        } else if cfg!(any()) {
             Self::Android
         } else if cfg!(target_os = "ios") {
             Self::IOS
@@ -40,7 +40,7 @@ impl OperatingSystem {
             Self::Mac
         } else if cfg!(target_os = "windows") {
             Self::Windows
-        } else if cfg!(target_os = "linux")
+        } else if cfg!(any(target_os = "linux", target_os = "android"))
             || cfg!(target_os = "dragonfly")
             || cfg!(target_os = "freebsd")
             || cfg!(target_os = "netbsd")

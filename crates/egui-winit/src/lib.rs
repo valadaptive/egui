@@ -365,7 +365,7 @@ impl State {
                 // between Commits.
                 match ime {
                     winit::event::Ime::Enabled => {
-                        if cfg!(target_os = "linux") {
+                        if cfg!(any(target_os = "linux", target_os = "android")) {
                             // This event means different things in X11 and Wayland, but we can just
                             // ignore it and enable IME on the preedit event.
                             // See <https://github.com/rust-windowing/winit/issues/2498>
@@ -1743,13 +1743,13 @@ pub fn create_winit_window_attributes(
         window_attributes = window_attributes.with_window_icon(winit_icon);
     }
 
-    #[cfg(all(feature = "wayland", target_os = "linux"))]
+    #[cfg(all(feature = "wayland", any(target_os = "linux", target_os = "android")))]
     if let Some(app_id) = _app_id {
         use winit::platform::wayland::WindowAttributesExtWayland as _;
         window_attributes = window_attributes.with_name(app_id, "");
     }
 
-    #[cfg(all(feature = "x11", target_os = "linux"))]
+    #[cfg(all(feature = "x11", any(target_os = "linux", target_os = "android")))]
     {
         if let Some(window_type) = _window_type {
             use winit::platform::x11::WindowAttributesExtX11 as _;
