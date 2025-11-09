@@ -2,7 +2,7 @@
 
 use eframe::{CreationContext, egui};
 
-#[cfg(target_os = "android")]
+#[cfg(any())]
 #[no_mangle]
 fn android_main(app: winit::platform::android::activity::AndroidApp) {
     // Log to android output

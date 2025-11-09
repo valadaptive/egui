@@ -15,7 +15,7 @@ pub fn create_egui_context(storage: Option<&dyn crate::Storage>) -> egui::Contex
 
     pub const IS_DESKTOP: bool = cfg!(any(
         target_os = "freebsd",
-        target_os = "linux",
+        any(target_os = "linux", target_os = "android"),
         target_os = "macos",
         target_os = "openbsd",
         target_os = "windows",

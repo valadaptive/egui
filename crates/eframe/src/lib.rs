@@ -146,11 +146,7 @@
 
 // Limitation imposed by `accesskit_winit`:
 // https://github.com/AccessKit/accesskit/tree/accesskit-v0.18.0/platforms/winit#android-activity-compatibility`
-#[cfg(all(
-    target_os = "android",
-    feature = "accesskit",
-    feature = "android-native-activity"
-))]
+#[cfg(all(any(), feature = "accesskit", feature = "android-native-activity"))]
 compile_error!("`accesskit` feature is only available with `android-game-activity`");
 
 // Re-export all useful libraries:

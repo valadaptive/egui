@@ -142,7 +142,7 @@ impl<'app> WgpuWinitApp<'app> {
         }
     }
 
-    #[cfg(target_os = "android")]
+    #[cfg(any())]
     fn recreate_window(&self, event_loop: &ActiveEventLoop, running: &WgpuWinitRunning<'app>) {
         let SharedState {
             egui_ctx,
@@ -163,7 +163,7 @@ impl<'app> WgpuWinitApp<'app> {
         .initialize_window(event_loop, egui_ctx, viewport_from_window, painter);
     }
 
-    #[cfg(target_os = "android")]
+    #[cfg(any())]
     fn drop_window(&mut self) -> Result<(), egui_wgpu::WgpuError> {
         if let Some(running) = &mut self.running {
             let mut shared = running.shared.borrow_mut();
@@ -385,7 +385,7 @@ impl WinitApp for WgpuWinitApp<'_> {
         log::debug!("Event::Resumed");
 
         let running = if let Some(running) = &self.running {
-            #[cfg(target_os = "android")]
+            #[cfg(any())]
             self.recreate_window(event_loop, running);
             running
         } else {
@@ -419,7 +419,7 @@ impl WinitApp for WgpuWinitApp<'_> {
     }
 
     fn suspended(&mut self, _: &ActiveEventLoop) -> crate::Result<EventResult> {
-        #[cfg(target_os = "android")]
+        #[cfg(any())]
         self.drop_window()?;
         Ok(EventResult::Save)
     }
@@ -1086,7 +1086,7 @@ fn handle_viewport_output(
             );
 
             // For Wayland : https://github.com/emilk/egui/issues/4196
-            if cfg!(target_os = "linux") {
+            if cfg!(any(target_os = "linux", target_os = "android")) {
                 let new_inner_size = window.inner_size();
                 if new_inner_size != old_inner_size {
                     if let (Some(width), Some(height)) = (
