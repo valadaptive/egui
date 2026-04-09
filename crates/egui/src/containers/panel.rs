@@ -693,6 +693,15 @@ impl Panel {
             add_contents(ui)
         });
 
+        let mut inner_response = inner_response;
+        inner_response.response.rect = inner_response
+            .response
+            .rect
+            .intersect(panel_sizer.panel_rect);
+        inner_response.response.interact_rect = inner_response
+            .response
+            .interact_rect
+            .intersect(panel_sizer.panel_rect);
         let rect = inner_response.response.rect;
 
         {
